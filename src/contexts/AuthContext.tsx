@@ -117,18 +117,119 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
+  const createDemoUser = async (email: string, password: string, userData: any) => {
+    // Try to sign up the demo user
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+      email,
+      password
+    });
+    
+    if (signUpError) {
+      // If user already exists but we can't sign in, there might be an issue
+      if (signUpError.message.includes('already registered')) {
+        throw new Error('Demo account exists but login failed. Please contact support.');
+      }
+      throw signUpError;
+    }
+    
+    if (signUpData.user) {
+      // Create user profile in our users table
+      const { error: insertError } = await supabase
+        .from('users')
+        .insert({
+          id: signUpData.user.id,
+          email: userData.email,
+          first_name: userData.firstName,
+          last_name: userData.lastName,
+          role: userData.role,
+          avatar: userData.avatar,
+          phone: userData.phone,
+          onboarding_completed: userData.onboardingCompleted,
+          has_seen_intro_video: userData.hasSeenIntroVideo
+        });
+      
+      if (insertError) throw insertError;
+      
+      // If user is a client, create a client profile
+      if (userData.role === 'client') {
+        const { error: profileError } = await supabase
+          .from('client_profiles')
+          .insert({
+            user_id: signUpData.user.id,
+            status: 'active',
+            wellness_score: 70
+          });
+        
+        if (profileError) throw profileError;
+      }
+      
+      // Return the session data
+      return signUpData;
+    }
+    
+    throw new Error('Failed to create demo user');
+  };
+
   const login = async (email: string, password: string) => {
     setIsLoading(true);
     
     try {
-      // For demo purposes, allow login with demo credentials
-      if (email === 'practitioner@lifearrow.com' && password === 'password') {
+      // Check if this is a demo account
+      const isDemoAccount = email === 'practitioner@lifearrow.com' || email === 'client@lifearrow.com';
+      
+      if (isDemoAccount) {
+        // Try to sign in first
         const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password
         });
         
-        if (error) throw error;
+        if (error) {
+          // If login fails with invalid credentials, try to create the demo user
+          if (error.message.includes('Invalid login credentials')) {
+            let demoUserData;
+            
+            if (email === 'practitioner@lifearrow.com') {
+              demoUserData = {
+                email,
+                firstName: 'Dr. Sarah',
+                lastName: 'Johnson',
+                role: 'practitioner',
+                avatar: 'https://images.pexels.com/photos/5327585/pexels-photo-5327585.jpeg?auto=compress&cs=tinysrgb&w=150&h=150&dpr=2',
+                phone: '+27 11 123 4567',
+                onboardingCompleted: true,
+                hasSeenIntroVideo: true
+              };
+            } else {
+              demoUserData = {
+                email,
+                firstName: 'John',
+                lastName: 'Doe',
+                role: 'client',
+                avatar: 'https://images.pexels.com/photos/2379004/pexels-photo-2379004.jpeg?auto=compress&cs=tinysrgb&w=150&h=150&dpr=2',
+                phone: '+1 (555) 987-6543',
+                onboardingCompleted: true,
+                hasSeenIntroVideo: true
+              };
+            }
+            
+            // Create the demo user
+            await createDemoUser(email, password, demoUserData);
+            
+            // Now try to sign in again
+            const { data: retryData, error: retryError } = await supabase.auth.signInWithPassword({
+              email,
+              password
+            });
+            
+            if (retryError) throw retryError;
+            
+            // Success - the auth state change listener will handle setting the user
+            return;
+          } else {
+            throw error;
+          }
+        }
         
         // Check if user exists in our users table
         const { data: userData, error: userError } = await supabase
@@ -139,45 +240,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         // If user doesn't exist in our table, create them
         if (userError) {
-          // Create user profile
-          const { error: insertError } = await supabase
-            .from('users')
-            .insert({
+          let demoUserData;
+          
+          if (email === 'practitioner@lifearrow.com') {
+            demoUserData = {
               id: data.user.id,
-              email: email,
+              email,
               first_name: 'Dr. Sarah',
               last_name: 'Johnson',
               role: 'practitioner',
               avatar: 'https://images.pexels.com/photos/5327585/pexels-photo-5327585.jpeg?auto=compress&cs=tinysrgb&w=150&h=150&dpr=2',
               phone: '+27 11 123 4567',
-              onboarding_completed: true
-            });
-          
-          if (insertError) throw insertError;
-        }
-      } else if (email === 'client@lifearrow.com' && password === 'password') {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email,
-          password
-        });
-        
-        if (error) throw error;
-        
-        // Check if user exists in our users table
-        const { data: userData, error: userError } = await supabase
-          .from('users')
-          .select('*')
-          .eq('id', data.user.id)
-          .single();
-        
-        // If user doesn't exist in our table, create them
-        if (userError) {
-          // Create user profile
-          const { error: insertError } = await supabase
-            .from('users')
-            .insert({
+              onboarding_completed: true,
+              has_seen_intro_video: true
+            };
+          } else {
+            demoUserData = {
               id: data.user.id,
-              email: email,
+              email,
               first_name: 'John',
               last_name: 'Doe',
               role: 'client',
@@ -185,12 +265,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               phone: '+1 (555) 987-6543',
               onboarding_completed: true,
               has_seen_intro_video: true
-            });
+            };
+          }
+          
+          // Create user profile
+          const { error: insertError } = await supabase
+            .from('users')
+            .insert(demoUserData);
           
           if (insertError) throw insertError;
+          
+          // If user is a client, create a client profile
+          if (demoUserData.role === 'client') {
+            const { error: profileError } = await supabase
+              .from('client_profiles')
+              .insert({
+                user_id: data.user.id,
+                status: 'active',
+                wellness_score: 70
+              });
+            
+            if (profileError) throw profileError;
+          }
         }
       } else {
-        // Regular login
+        // Regular login for non-demo accounts
         const { error } = await supabase.auth.signInWithPassword({
           email,
           password

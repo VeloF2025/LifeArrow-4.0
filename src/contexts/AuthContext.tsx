@@ -238,8 +238,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           .eq('id', data.user.id)
           .single();
         
-        // If user doesn't exist in our table, create them
-        if (userError) {
+        // If user doesn't exist in our table (PGRST116 = row not found), create them
+        if (userError && userError.code === 'PGRST116') {
           let demoUserData;
           
           if (email === 'practitioner@lifearrow.com') {
@@ -268,25 +268,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             };
           }
           
-          // Create user profile
+          // Create user profile - use upsert to handle potential duplicates
           const { error: insertError } = await supabase
             .from('users')
-            .insert(demoUserData);
+            .upsert(demoUserData, { 
+              onConflict: 'id',
+              ignoreDuplicates: false 
+            });
           
-          if (insertError) throw insertError;
+          if (insertError) {
+            // If it's still a duplicate key error, the user already exists, which is fine
+            if (!insertError.message.includes('duplicate key')) {
+              throw insertError;
+            }
+          }
           
           // If user is a client, create a client profile
           if (demoUserData.role === 'client') {
             const { error: profileError } = await supabase
               .from('client_profiles')
-              .insert({
+              .upsert({
                 user_id: data.user.id,
                 status: 'active',
                 wellness_score: 70
+              }, {
+                onConflict: 'user_id',
+                ignoreDuplicates: true
               });
             
-            if (profileError) throw profileError;
+            if (profileError && !profileError.message.includes('duplicate key')) {
+              throw profileError;
+            }
           }
+        } else if (userError) {
+          // Re-throw any other errors
+          throw userError;
         }
       } else {
         // Regular login for non-demo accounts

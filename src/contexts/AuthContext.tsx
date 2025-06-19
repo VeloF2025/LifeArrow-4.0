@@ -41,30 +41,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         if (session) {
           // Get user profile from our users table
-          const { data: userData, error: userError } = await supabase
-            .from('users')
-            .select('*')
-            .eq('id', session.user.id)
-            .single();
-          
-          if (userError) {
-            console.error('Error fetching user data:', userError);
-            return;
-          }
-          
-          if (userData) {
-            setUser({
-              id: userData.id,
-              email: userData.email,
-              firstName: userData.first_name,
-              lastName: userData.last_name,
-              role: userData.role,
-              avatar: userData.avatar,
-              phone: userData.phone,
-              createdAt: new Date(userData.created_at),
-              onboardingCompleted: userData.onboarding_completed,
-              hasSeenIntroVideo: userData.has_seen_intro_video
-            });
+          try {
+            const { data: userData, error: userError } = await supabase
+              .from('users')
+              .select('*')
+              .eq('id', session.user.id)
+              .single();
+            
+            if (userError) {
+              console.error('Error fetching user data:', userError);
+              return;
+            }
+            
+            if (userData) {
+              setUser({
+                id: userData.id,
+                email: userData.email,
+                firstName: userData.first_name,
+                lastName: userData.last_name,
+                role: userData.role,
+                avatar: userData.avatar,
+                phone: userData.phone,
+                createdAt: new Date(userData.created_at),
+                onboardingCompleted: userData.onboarding_completed,
+                hasSeenIntroVideo: userData.has_seen_intro_video
+              });
+            }
+          } catch (error) {
+            console.error('Error processing user data:', error);
           }
         }
       } catch (error) {
@@ -81,30 +85,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       async (event, session) => {
         if (event === 'SIGNED_IN' && session) {
           // Get user profile from our users table
-          const { data: userData, error: userError } = await supabase
-            .from('users')
-            .select('*')
-            .eq('id', session.user.id)
-            .single();
-          
-          if (userError) {
-            console.error('Error fetching user data:', userError);
-            return;
-          }
-          
-          if (userData) {
-            setUser({
-              id: userData.id,
-              email: userData.email,
-              firstName: userData.first_name,
-              lastName: userData.last_name,
-              role: userData.role,
-              avatar: userData.avatar,
-              phone: userData.phone,
-              createdAt: new Date(userData.created_at),
-              onboardingCompleted: userData.onboarding_completed,
-              hasSeenIntroVideo: userData.has_seen_intro_video
-            });
+          try {
+            const { data: userData, error: userError } = await supabase
+              .from('users')
+              .select('*')
+              .eq('id', session.user.id)
+              .single();
+            
+            if (userError) {
+              console.error('Error fetching user data:', userError);
+              return;
+            }
+            
+            if (userData) {
+              setUser({
+                id: userData.id,
+                email: userData.email,
+                firstName: userData.first_name,
+                lastName: userData.last_name,
+                role: userData.role,
+                avatar: userData.avatar,
+                phone: userData.phone,
+                createdAt: new Date(userData.created_at),
+                onboardingCompleted: userData.onboarding_completed,
+                hasSeenIntroVideo: userData.has_seen_intro_video
+              });
+            }
+          } catch (error) {
+            console.error('Error processing user data on auth change:', error);
           }
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
@@ -118,56 +126,108 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const createDemoUser = async (email: string, password: string, userData: any) => {
-    // Try to sign up the demo user
-    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-      email,
-      password
+    // First check if the user already exists in auth
+    const { data: { users: existingAuthUsers }, error: authCheckError } = await supabase.auth.admin.listUsers({
+      filters: {
+        email: email
+      }
     });
     
-    if (signUpError) {
-      // If user already exists but we can't sign in, there might be an issue
-      if (signUpError.message.includes('already registered')) {
-        throw new Error('Demo account exists but login failed. Please contact support.');
+    let userId;
+    
+    // If user doesn't exist in auth or we couldn't check, try to sign up
+    if (authCheckError || !existingAuthUsers || existingAuthUsers.length === 0) {
+      // Try to sign up the demo user
+      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password
+      });
+      
+      if (signUpError) {
+        // If user already exists but we can't sign in, there might be an issue
+        if (signUpError.message.includes('already registered')) {
+          throw new Error('Demo account exists but login failed. Please contact support.');
+        }
+        throw signUpError;
       }
-      throw signUpError;
+      
+      if (!signUpData.user) {
+        throw new Error('Failed to create demo user');
+      }
+      
+      userId = signUpData.user.id;
+    } else {
+      // User exists in auth, use their ID
+      userId = existingAuthUsers[0].id;
     }
     
-    if (signUpData.user) {
-      // Create user profile in our users table
-      const { error: insertError } = await supabase
-        .from('users')
-        .insert({
-          id: signUpData.user.id,
-          email: userData.email,
-          first_name: userData.firstName,
-          last_name: userData.lastName,
-          role: userData.role,
-          avatar: userData.avatar,
-          phone: userData.phone,
-          onboarding_completed: userData.onboardingCompleted,
-          has_seen_intro_video: userData.hasSeenIntroVideo
-        });
-      
-      if (insertError) throw insertError;
-      
-      // If user is a client, create a client profile
-      if (userData.role === 'client') {
-        const { error: profileError } = await supabase
-          .from('client_profiles')
-          .insert({
-            user_id: signUpData.user.id,
-            status: 'active',
-            wellness_score: 70
+    // Check if user exists in our users table
+    const { data: existingUser, error: userCheckError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('id', userId)
+      .single();
+    
+    // Only insert if user doesn't exist in our table
+    if (userCheckError && userCheckError.code === 'PGRST116') {
+      // User doesn't exist in our table, create them
+      try {
+        const { error: insertError } = await supabase
+          .from('users')
+          .upsert({
+            id: userId,
+            email: userData.email,
+            first_name: userData.firstName,
+            last_name: userData.lastName,
+            role: userData.role,
+            avatar: userData.avatar,
+            phone: userData.phone,
+            onboarding_completed: userData.onboardingCompleted,
+            has_seen_intro_video: userData.hasSeenIntroVideo
+          }, {
+            onConflict: 'id',
+            ignoreDuplicates: false
           });
         
-        if (profileError) throw profileError;
+        if (insertError) {
+          console.error('Error inserting user:', insertError);
+          // Continue anyway, as the user might already exist
+        }
+        
+        // If user is a client, create a client profile
+        if (userData.role === 'client') {
+          // Check if client profile exists
+          const { data: existingProfile, error: profileCheckError } = await supabase
+            .from('client_profiles')
+            .select('id')
+            .eq('user_id', userId)
+            .single();
+          
+          if (profileCheckError && profileCheckError.code === 'PGRST116') {
+            // Profile doesn't exist, create it
+            const { error: profileError } = await supabase
+              .from('client_profiles')
+              .upsert({
+                user_id: userId,
+                status: 'active',
+                wellness_score: 70
+              }, {
+                onConflict: 'user_id',
+                ignoreDuplicates: true
+              });
+            
+            if (profileError && !profileError.message.includes('duplicate key')) {
+              console.error('Error creating client profile:', profileError);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error in user creation process:', error);
       }
-      
-      // Return the session data
-      return signUpData;
     }
     
-    throw new Error('Failed to create demo user');
+    // Return the user ID for login
+    return userId;
   };
 
   const login = async (email: string, password: string) => {
@@ -232,77 +292,81 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         
         // Check if user exists in our users table
-        const { data: userData, error: userError } = await supabase
-          .from('users')
-          .select('*')
-          .eq('id', data.user.id)
-          .single();
-        
-        // If user doesn't exist in our table (PGRST116 = row not found), create them
-        if (userError && userError.code === 'PGRST116') {
-          let demoUserData;
-          
-          if (email === 'practitioner@lifearrow.com') {
-            demoUserData = {
-              id: data.user.id,
-              email,
-              first_name: 'Dr. Sarah',
-              last_name: 'Johnson',
-              role: 'practitioner',
-              avatar: 'https://images.pexels.com/photos/5327585/pexels-photo-5327585.jpeg?auto=compress&cs=tinysrgb&w=150&h=150&dpr=2',
-              phone: '+27 11 123 4567',
-              onboarding_completed: true,
-              has_seen_intro_video: true
-            };
-          } else {
-            demoUserData = {
-              id: data.user.id,
-              email,
-              first_name: 'John',
-              last_name: 'Doe',
-              role: 'client',
-              avatar: 'https://images.pexels.com/photos/2379004/pexels-photo-2379004.jpeg?auto=compress&cs=tinysrgb&w=150&h=150&dpr=2',
-              phone: '+1 (555) 987-6543',
-              onboarding_completed: true,
-              has_seen_intro_video: true
-            };
-          }
-          
-          // Create user profile - use upsert to handle potential duplicates
-          const { error: insertError } = await supabase
+        try {
+          const { data: userData, error: userError } = await supabase
             .from('users')
-            .upsert(demoUserData, { 
-              onConflict: 'id',
-              ignoreDuplicates: false 
-            });
+            .select('*')
+            .eq('id', data.user.id)
+            .single();
           
-          if (insertError) {
-            // If it's still a duplicate key error, the user already exists, which is fine
-            if (!insertError.message.includes('duplicate key')) {
-              throw insertError;
+          // If user doesn't exist in our table, create them
+          if (userError && userError.code === 'PGRST116') {
+            let demoUserData;
+            
+            if (email === 'practitioner@lifearrow.com') {
+              demoUserData = {
+                id: data.user.id,
+                email,
+                first_name: 'Dr. Sarah',
+                last_name: 'Johnson',
+                role: 'practitioner',
+                avatar: 'https://images.pexels.com/photos/5327585/pexels-photo-5327585.jpeg?auto=compress&cs=tinysrgb&w=150&h=150&dpr=2',
+                phone: '+27 11 123 4567',
+                onboarding_completed: true,
+                has_seen_intro_video: true
+              };
+            } else {
+              demoUserData = {
+                id: data.user.id,
+                email,
+                first_name: 'John',
+                last_name: 'Doe',
+                role: 'client',
+                avatar: 'https://images.pexels.com/photos/2379004/pexels-photo-2379004.jpeg?auto=compress&cs=tinysrgb&w=150&h=150&dpr=2',
+                phone: '+1 (555) 987-6543',
+                onboarding_completed: true,
+                has_seen_intro_video: true
+              };
             }
-          }
-          
-          // If user is a client, create a client profile
-          if (demoUserData.role === 'client') {
-            const { error: profileError } = await supabase
-              .from('client_profiles')
-              .upsert({
-                user_id: data.user.id,
-                status: 'active',
-                wellness_score: 70
-              }, {
-                onConflict: 'user_id',
-                ignoreDuplicates: true
+            
+            // Create user profile - use upsert to handle potential duplicates
+            const { error: insertError } = await supabase
+              .from('users')
+              .upsert(demoUserData, { 
+                onConflict: 'id',
+                ignoreDuplicates: false 
               });
             
-            if (profileError && !profileError.message.includes('duplicate key')) {
-              throw profileError;
+            if (insertError) {
+              // If it's still a duplicate key error, the user already exists, which is fine
+              if (!insertError.message.includes('duplicate key')) {
+                console.error('Error creating user profile:', insertError);
+              }
             }
+            
+            // If user is a client, create a client profile
+            if (demoUserData.role === 'client') {
+              const { error: profileError } = await supabase
+                .from('client_profiles')
+                .upsert({
+                  user_id: data.user.id,
+                  status: 'active',
+                  wellness_score: 70
+                }, {
+                  onConflict: 'user_id',
+                  ignoreDuplicates: true
+                });
+              
+              if (profileError && !profileError.message.includes('duplicate key')) {
+                console.error('Error creating client profile:', profileError);
+              }
+            }
+          } else if (userError) {
+            // Re-throw any other errors
+            console.error('Error checking user profile:', userError);
           }
-        } else if (userError) {
-          // Re-throw any other errors
-          throw userError;
+        } catch (error) {
+          console.error('Error in user profile check/creation:', error);
         }
       } else {
         // Regular login for non-demo accounts
@@ -334,38 +398,53 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (error) throw error;
       
       if (data.user) {
-        // Create user profile in our users table
-        const { error: insertError } = await supabase
-          .from('users')
-          .insert({
-            id: data.user.id,
-            email: userData.email,
-            first_name: userData.firstName,
-            last_name: userData.lastName,
-            role: userData.role,
-            phone: userData.phone,
-            avatar: userData.role === 'practitioner' 
-              ? 'https://images.pexels.com/photos/5327585/pexels-photo-5327585.jpeg?auto=compress&cs=tinysrgb&w=150&h=150&dpr=2'
-              : 'https://images.pexels.com/photos/2379004/pexels-photo-2379004.jpeg?auto=compress&cs=tinysrgb&w=150&h=150&dpr=2',
-            onboarding_completed: userData.role === 'practitioner', // Only clients need onboarding
-            has_seen_intro_video: userData.role === 'practitioner' // Only clients need to see intro video
-          });
-        
-        if (insertError) throw insertError;
-        
-        // If user is a client, create a client profile
-        if (userData.role === 'client') {
-          const { data: clientProfile, error: profileError } = await supabase
-            .from('client_profiles')
-            .insert({
-              user_id: data.user.id,
-              status: 'active',
-              wellness_score: 70
-            })
-            .select()
-            .single();
+        try {
+          // Create user profile in our users table
+          const { error: insertError } = await supabase
+            .from('users')
+            .upsert({
+              id: data.user.id,
+              email: userData.email,
+              first_name: userData.firstName,
+              last_name: userData.lastName,
+              role: userData.role,
+              phone: userData.phone,
+              avatar: userData.role === 'practitioner' 
+                ? 'https://images.pexels.com/photos/5327585/pexels-photo-5327585.jpeg?auto=compress&cs=tinysrgb&w=150&h=150&dpr=2'
+                : 'https://images.pexels.com/photos/2379004/pexels-photo-2379004.jpeg?auto=compress&cs=tinysrgb&w=150&h=150&dpr=2',
+              onboarding_completed: userData.role === 'practitioner', // Only clients need onboarding
+              has_seen_intro_video: userData.role === 'practitioner' // Only clients need to see intro video
+            }, {
+              onConflict: 'id',
+              ignoreDuplicates: false
+            });
           
-          if (profileError) throw profileError;
+          if (insertError) {
+            console.error('Error creating user profile:', insertError);
+            throw insertError;
+          }
+          
+          // If user is a client, create a client profile
+          if (userData.role === 'client') {
+            const { error: profileError } = await supabase
+              .from('client_profiles')
+              .upsert({
+                user_id: data.user.id,
+                status: 'active',
+                wellness_score: 70
+              }, {
+                onConflict: 'user_id',
+                ignoreDuplicates: true
+              });
+            
+            if (profileError && !profileError.message.includes('duplicate key')) {
+              console.error('Error creating client profile:', profileError);
+              throw profileError;
+            }
+          }
+        } catch (error) {
+          console.error('Error in user creation process:', error);
+          throw error;
         }
       }
     } catch (error) {
